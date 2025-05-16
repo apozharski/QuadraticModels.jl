@@ -210,7 +210,7 @@ function QuadraticModel(
       nvar,
       lvar = lvar,
       uvar = uvar,
-      ncon = size(A, 1),
+      ncon = ncon,
       lcon = lcon,
       ucon = ucon,
       nnzj = nnzj,
@@ -275,7 +275,7 @@ end
 
 linobj(qp::AbstractQuadraticModel, args...) = qp.data.c
 
-function NLPModels.objgrad!(qp::AbstractQuadraticModel, x::AbstractVector, g::AbstractVector)
+function NLPModels.objgrad!(qp::QuadraticModel, x::AbstractVector, g::AbstractVector)
   NLPModels.increment!(qp, :neval_obj)
   NLPModels.increment!(qp, :neval_grad)
   mul!(g, Symmetric(qp.data.H, :L), x)
@@ -288,7 +288,7 @@ function NLPModels.objgrad!(qp::AbstractQuadraticModel, x::AbstractVector, g::Ab
   return f, g
 end
 
-function NLPModels.obj(qp::AbstractQuadraticModel{T, S}, x::AbstractVector) where {T, S}
+function NLPModels.obj(qp::QuadraticModel, x::AbstractVector)
   NLPModels.increment!(qp, :neval_obj)
   mul!(qp.data.v, Symmetric(qp.data.H, :L), x)
   f = qp.data.c0 + dot(qp.data.c, x) + dot(qp.data.v, x) / 2
@@ -298,7 +298,7 @@ function NLPModels.obj(qp::AbstractQuadraticModel{T, S}, x::AbstractVector) wher
   return f
 end
 
-function NLPModels.grad!(qp::AbstractQuadraticModel, x::AbstractVector, g::AbstractVector)
+function NLPModels.grad!(qp::QuadraticModel, x::AbstractVector, g::AbstractVector)
   NLPModels.increment!(qp, :neval_grad)
   mul!(g, Symmetric(qp.data.H, :L), x)
   g .+= qp.data.c
@@ -420,7 +420,7 @@ function NLPModels.hess_coord!(
 end
 
 NLPModels.hess_coord!(
-  qp::QuadraticModel,
+  qp::AbstractQuadraticModel,
   x::AbstractVector,
   y::AbstractVector,
   vals::AbstractVector;
@@ -449,7 +449,7 @@ function NLPModels.jac_lin_structure!(
 end
 
 function NLPModels.jac_lin_structure!(
-  qp::QuadraticModel{T, S, M1, M2},
+  qp::AbstractQuadraticModel{T, S, M1, M2},
   rows::AbstractVector{<:Integer},
   cols::AbstractVector{<:Integer},
 ) where {T, S, M1, M2 <: Matrix}
@@ -466,7 +466,7 @@ function NLPModels.jac_lin_structure!(
 end
 
 function NLPModels.jac_lin_coord!(
-  qp::QuadraticModel{T, S, M1, M2},
+  qp::AbstractQuadraticModel{T, S, M1, M2},
   x::AbstractVector,
   vals::AbstractVector,
 ) where {T, S, M1, M2 <: SparseMatrixCOO}
@@ -478,7 +478,7 @@ function NLPModels.jac_lin_coord!(
 end
 
 function NLPModels.jac_lin_coord!(
-  qp::QuadraticModel{T, S, M1, M2},
+  qp::AbstractQuadraticModel{T, S, M1, M2},
   x::AbstractVector,
   vals::AbstractVector,
 ) where {T, S, M1, M2 <: SparseMatrixCSC}
@@ -490,7 +490,7 @@ function NLPModels.jac_lin_coord!(
 end
 
 function NLPModels.jac_lin_coord!(
-  qp::QuadraticModel{T, S, M1, M2},
+  qp::AbstractQuadraticModel{T, S, M1, M2},
   x::AbstractVector,
   vals::AbstractVector,
 ) where {T, S, M1, M2 <: Matrix}
@@ -508,7 +508,7 @@ function NLPModels.jac_lin_coord!(
 end
 
 function NLPModels.jac_lin(
-  qp::QuadraticModel{T, S, M1, M2},
+  qp::AbstractQuadraticModel{T, S, M1, M2},
   x::AbstractVector,
 ) where {T, S, M1 <: AbstractLinearOperator, M2 <: AbstractLinearOperator}
   @lencheck qp.meta.nvar x
@@ -525,7 +525,7 @@ function NLPModels.cons_lin!(qp::AbstractQuadraticModel, x::AbstractVector, c::A
 end
 
 function NLPModels.hprod!(
-  qp::AbstractQuadraticModel,
+  qp::QuadraticModel,
   x::AbstractVector,
   v::AbstractVector,
   Hv::AbstractVector;
@@ -561,19 +561,6 @@ function NLPModels.jprod_lin!(
   NLPModels.increment!(qp, :neval_jprod_lin)
   mul!(Av, qp.data.A, v)
   return Av
-end
-
-function NLPModels.jtprod!(
-  qp::AbstractQuadraticModel,
-  x::AbstractVector,
-  v::AbstractVector,
-  Atv::AbstractVector,
-)
-  @lencheck qp.meta.nvar x Atv
-  @lencheck qp.meta.ncon v
-  NLPModels.increment!(qp, :neval_jtprod)
-  mul!(Atv, transpose(qp.data.A), v)
-  return Atv
 end
 
 function NLPModels.jtprod_lin!(
