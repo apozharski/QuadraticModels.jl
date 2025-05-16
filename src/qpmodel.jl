@@ -17,8 +17,8 @@ mutable struct QPData{
   σ::T # Regularization parameter if regularize is true
 end
 
-@inline QPData(c0, c, H, A; regularize = false, selected = 1:length(c), σ = zero(c0)) =
-  QPData(c0, c, lp ? similar(c): similar(c, 0), H, A, regularize, selected, σ)
+@inline QPData(c0, c, H, A; lp::Bool=false, regularize = false, selected = 1:length(c), σ = zero(c0)) =
+  QPData(c0, c, lp ? similar(c, 0) : similar(c), H, A, regularize, selected, σ)
 isdense(data::QPData{T, S, M1, M2}) where {T, S, M1, M2} = M1 <: DenseMatrix || M2 <: DenseMatrix
 
 function Base.convert(
