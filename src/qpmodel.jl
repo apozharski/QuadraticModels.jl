@@ -46,6 +46,7 @@ abstract type AbstractQuadraticModel{T, S, M1, M2} <: AbstractNLPModel{T, S} end
 
 Create a Quadratic model ``min ~\\tfrac{1}{2} x^T (H + σI) x + c^T x + c_0`` with optional bounds
 `lvar ≦ x ≦ uvar` and optional linear constraints `lcon ≦ Ax ≦ ucon`.
+
 The user should only give the lower triangle of `H` to the `QuadraticModel` constructor.
 
 With the first constructor, if `sortcols = true`, then `Hcols` and `Acols` are sorted in ascending order 
@@ -54,6 +55,14 @@ With the first constructor, if `sortcols = true`, then `Hcols` and `Acols` are s
 If `regularize = true` or `σ != 0`, then a quadratic regularization term `\\tfrac{σ}{2} \\sum_{i ∈ selected} x_i^2` is added to the objective function.
 If `regularize = true`, extra space for diagonal entries of the Hessian matrix will be allocated, regardless of the value of `σ`.
 This is useful if one wants to initialize the model without regularization but plans on adding it later.
+
+    lp = QuadraticModel(c, Arows, Acols, Avals;
+                        lcon = lcon, ucon = ucon, lvar = lvar, uvar = uvar, c0 = c0, sortcols = false)
+
+    lp = QuadraticModel(c, A; lcon = lcon, ucon = ucon, lvar = lvar, uvar = uvar, c0 = c0)
+
+Create a Linear model ``c^T x + c_0`` with linear constraints `lcon ≦ Ax ≦ ucon` and
+optional bounds `lvar ≦ x ≦ uvar` and .
 
 You can also use [`QPSReader.jl`](https://github.com/JuliaSmoothOptimizers/QPSReader.jl) to
 create a Quadratic model from a QPS file:
@@ -109,7 +118,7 @@ function QuadraticModel(
   selected::UnitRange{Int} = 1:length(c),
   σ::T = zero(eltype(c)),
   kwargs...,
-) where {T, S}
+) where {T, S <: AbstractVector{T}}
   @assert all(lvar .≤ uvar)
   @assert all(lcon .≤ ucon)
   nnzh = length(Hvals)
@@ -161,9 +170,71 @@ function QuadraticModel(
       c,
       SparseMatrixCOO(nvar, nvar, Hrows, Hcols, Hvals),
       SparseMatrixCOO(ncon, nvar, Arows, Acols, Avals),
-      regularize = regularize,
-      selected = selected,
-      σ = σ,
+      lp = false,
+    ),
+  )
+end
+
+
+function QuadraticModel(
+  c::S,
+  Arows::AbstractVector{<:Integer},
+  Acols::AbstractVector{<:Integer},
+  Avals::S;
+  lcon::S = S(undef, 0),
+  ucon::S = S(undef, 0),
+  lvar::S = fill!(S(undef, length(c)), eltype(c)(-Inf)),
+  uvar::S = fill!(S(undef, length(c)), eltype(c)(Inf)),
+  c0::T = zero(eltype(c)),
+  sortcols::Bool = false,
+  kwargs...,
+) where {T, S <: AbstractVector{T}}
+  @assert all(lvar .≤ uvar)
+  @assert all(lcon .≤ ucon)
+  nnzj = length(Avals)
+  if !(nnzj == length(Arows) == length(Acols))
+    error("The length of Arows, Acols and Avals must be the same")
+  end
+  ncon = length(lcon)
+  if ncon != length(ucon)
+    error("The length of lcon and ucon must be the same")
+  end
+  nvar = length(c)
+  if !(nvar == length(lvar) == length(uvar))
+    error("The length of c, lvar and uvar must be the same")
+  end
+  if sortcols
+    pA = sortperm(Acols)
+    permute!(Arows, pA)
+    permute!(Acols, pA)
+    permute!(Avals, pA)
+  end
+  QuadraticModel(
+    NLPModelMeta{T, S}(
+      length(c),
+      lvar = lvar,
+      uvar = uvar,
+      ncon = ncon,
+      lcon = lcon,
+      ucon = ucon,
+      nnzj = nnzj,
+      lin_nnzj = nnzj,
+      nln_nnzj = 0,
+      nnzh = 0,
+      lin = 1:ncon,
+      islp = true;
+      kwargs...,
+    ),
+    Counters(),
+    QPData(
+      c0,
+      c,
+      SparseMatrixCOO(nvar, nvar, Int[], Int[], T[]),
+      SparseMatrixCOO(ncon, nvar, Arows, Acols, Avals),
+      regularize = false,
+      selected = Int[],
+      σ = 0,
+      lp = true,
     ),
   )
 end
@@ -186,7 +257,7 @@ function QuadraticModel(
   selected::UnitRange{Int} = 1:length(c),
   σ::T = zero(T),
   kwargs...,
-) where {T, S}
+) where {T, S <: AbstractVector{T}}
   @assert all(lvar .≤ uvar)
   @assert all(lcon .≤ ucon)
   ncon, nvar = size(A)
@@ -194,15 +265,15 @@ function QuadraticModel(
   if typeof(H) <: AbstractLinearOperator # convert A to a LinOp if A is a Matrix?
     nnzh = 0
     nnzj = 0
-    data = QPData(c0, c, H, A, regularize = regularize, selected = selected, σ = σ)
+    data = QPData(c0, c, H, A, regularize = regularize, selected = selected, σ = σ, lp=false)
   elseif typeof(H) <: Symmetric
     nnzh = typeof(H.data) <: DenseMatrix ? nvar * (nvar + 1) / 2 : nnz(H) + (regularize ? length(selected) : 0)
     nnzj = nnz(A)
-    data = QPData(c0, c, H.data, A, regularize = regularize, selected = selected, σ = σ)
+    data = QPData(c0, c, H.data, A, regularize = regularize, selected = selected, σ = σ, lp=false)
   else
     nnzh = typeof(H) <: DenseMatrix ? nvar * (nvar + 1) / 2 : nnz(H) + (regularize ? length(selected) : 0)
     nnzj = nnz(A)
-    data = QPData(c0, c, H, A, regularize = regularize, selected = selected, σ = σ)
+    data = QPData(c0, c, H, A, regularize = regularize, selected = selected, σ = σ, lp=false)
   end
 
   QuadraticModel(
@@ -226,12 +297,55 @@ function QuadraticModel(
   )
 end
 
+
+function QuadraticModel(
+  c::S,
+  A::Union{AbstractMatrix{T}, AbstractLinearOperator{T}};
+  lcon::S = S(undef, 0),
+  ucon::S = S(undef, 0),
+  lvar::S = fill!(S(undef, length(c)), T(-Inf)),
+  uvar::S = fill!(S(undef, length(c)), T(Inf)),
+  c0::T = zero(T),
+  kwargs...,
+) where {T, S <: AbstractVector{T}}
+  @assert all(lvar .≤ uvar)
+  @assert all(lcon .≤ ucon)
+  ncon, nvar = size(A)
+  if typeof(A) <: AbstractLinearOperator # convert A to a LinOp if A is a Matrix?
+    nnzj = 0
+  else
+    nnzj = nnz(A)
+  end
+  H = SparseMatrixCOO(nvar, nvar, Int[], Int[], T[])
+  data = QPData(c0, c, H, A; lp=false)
+
+  QuadraticModel(
+    NLPModelMeta{T, S}(
+      nvar,
+      lvar = lvar,
+      uvar = uvar,
+      ncon = ncon,
+      lcon = lcon,
+      ucon = ucon,
+      nnzj = nnzj,
+      lin_nnzj = nnzj,
+      nln_nnzj = 0,
+      nnzh = 0,
+      lin = 1:ncon,
+      islp = true;
+      kwargs...,
+    ),
+    Counters(),
+    data,
+  )
+end
+
 """
     QuadraticModel(nlp, x)
 
 Creates a quadratic Taylor model of `nlp` around `x`.
 """
-function QuadraticModel(model::AbstractNLPModel{T, S}, x::AbstractVector; kwargs...) where {T, S}
+function QuadraticModel(model::AbstractNLPModel{T, S}, x::AbstractVector; kwargs...) where {T, S <: AbstractVector{T}}
   nvar = model.meta.nvar
   ncon = model.meta.ncon
   c0 = obj(model, x)
@@ -278,32 +392,46 @@ linobj(qp::AbstractQuadraticModel, args...) = qp.data.c
 function NLPModels.objgrad!(qp::QuadraticModel, x::AbstractVector, g::AbstractVector)
   NLPModels.increment!(qp, :neval_obj)
   NLPModels.increment!(qp, :neval_grad)
-  mul!(g, Symmetric(qp.data.H, :L), x)
-  f = qp.data.c0 + dot(qp.data.c, x) + dot(g, x) / 2
-  g .+= qp.data.c
-  if qp.data.regularize
-    @views g[qp.data.selected] .+= qp.data.σ .* x[qp.data.selected]
-    @views f += qp.data.σ * dot(x[qp.data.selected], x[qp.data.selected]) / 2
+    
+  if qp.meta.islp
+    f = qp.data.c0 + dot(qp.data.c, x)
+    g .= qp.data.c
+  else
+    mul!(g, Symmetric(qp.data.H, :L), x)
+    f = qp.data.c0 + dot(qp.data.c, x) + dot(g, x) / 2
+    g .+= qp.data.c
+    if qp.data.regularize
+      @views g[qp.data.selected] .+= qp.data.σ .* x[qp.data.selected]
+      @views f += qp.data.σ * dot(x[qp.data.selected], x[qp.data.selected]) / 2
+    end
   end
   return f, g
 end
 
 function NLPModels.obj(qp::QuadraticModel, x::AbstractVector)
   NLPModels.increment!(qp, :neval_obj)
+  if qp.meta.islp
+    f = qp.data.c0 + dot(qp.data.c, x)
+  else
   mul!(qp.data.v, Symmetric(qp.data.H, :L), x)
   f = qp.data.c0 + dot(qp.data.c, x) + dot(qp.data.v, x) / 2
   if qp.data.regularize
     @views f += qp.data.σ * dot(x[qp.data.selected], x[qp.data.selected]) / 2
+  end
   end
   return f
 end
 
 function NLPModels.grad!(qp::QuadraticModel, x::AbstractVector, g::AbstractVector)
   NLPModels.increment!(qp, :neval_grad)
+  if qp.meta.islp
+    g .= qp.data.c
+  else
   mul!(g, Symmetric(qp.data.H, :L), x)
   g .+= qp.data.c
   if qp.data.regularize
     @views g[qp.data.selected] .+= qp.data.σ .* x[qp.data.selected]
+    end
   end
   return g
 end
@@ -334,12 +462,16 @@ function fill_structure!(S::SparseMatrixCSC, rows, cols)
   end
 end
 
-function fill_coord!(S::SparseMatrixCSC, vals, obj_weight)
-  count = 1
-  @inbounds for col = 1:size(S, 2), k = S.colptr[col]:(S.colptr[col + 1] - 1)
-    vals[count] = obj_weight * S.nzval[k]
-    count += 1
+function NLPModels.hess_structure!(
+  qp::QuadraticModel{T, S, M1},
+  rows::AbstractVector{<:Integer},
+  cols::AbstractVector{<:Integer},
+) where {T, S, M1 <: SparseMatrixCOO}
+  if !qp.meta.islp
+    rows .= qp.data.H.rows
+    cols .= qp.data.H.cols
   end
+  return rows, cols
 end
 
 function NLPModels.hess_structure!(
@@ -347,11 +479,14 @@ function NLPModels.hess_structure!(
   rows::AbstractVector{<:Integer},
   cols::AbstractVector{<:Integer},
 ) where {T, S, M1 <: SparseMatrixCSC}
-  nnzh = qp.data.regularize ? qp.meta.nnzh - length(qp.data.selected) : qp.meta.nnzh
-  @views fill_structure!(qp.data.H, rows[1:nnzh], cols[1:nnzh])
-  if qp.data.regularize
-    @views rows[(nnzh + 1):end] .= qp.data.selected
-    @views cols[(nnzh + 1):end] .= qp.data.selected
+  if !qp.meta.islp
+    fill_structure!(qp.data.H, rows, cols)
+    nnzh = qp.data.regularize ? qp.meta.nnzh - length(qp.data.selected) : qp.meta.nnzh
+    @views fill_structure!(qp.data.H, rows[1:nnzh], cols[1:nnzh])
+    if qp.data.regularize
+      @views rows[(nnzh + 1):end] .= qp.data.selected
+      @views cols[(nnzh + 1):end] .= qp.data.selected
+    end
   end
   return rows, cols
 end
@@ -361,15 +496,25 @@ function NLPModels.hess_structure!(
   rows::AbstractVector{<:Integer},
   cols::AbstractVector{<:Integer},
 ) where {T, S, M1 <: Matrix}
-  count = 1
-  for j = 1:(qp.meta.nvar)
-    for i = j:(qp.meta.nvar)
-      rows[count] = i
-      cols[count] = j
-      count += 1
+  if !qp.meta.islp
+    count = 1
+    for j = 1:(qp.meta.nvar)
+      for i = j:(qp.meta.nvar)
+        rows[count] = i
+        cols[count] = j
+        count += 1
+      end
     end
   end
   return rows, cols
+end
+
+function fill_coord!(S::SparseMatrixCSC, vals, obj_weight)
+  count = 1
+  @inbounds for col = 1:size(S, 2), k = S.colptr[col]:(S.colptr[col + 1] - 1)
+    vals[count] = obj_weight * S.nzval[k]
+    count += 1
+  end
 end
 
 function NLPModels.hess_coord!(
@@ -379,9 +524,11 @@ function NLPModels.hess_coord!(
   obj_weight::Real = one(eltype(x)),
 ) where {T, S, M1 <: SparseMatrixCOO}
   NLPModels.increment!(qp, :neval_hess)
-  nnzh = qp.data.regularize ? qp.meta.nnzh - length(qp.data.selected) : qp.meta.nnzh
-  @views vals[1:nnzh] .= obj_weight .* qp.data.H.vals
-  @views vals[(nnzh + 1):end] .= obj_weight .* qp.data.σ
+  if !qp.meta.islp
+    nnzh = qp.data.regularize ? qp.meta.nnzh - length(qp.data.selected) : qp.meta.nnzh
+    @views vals[1:nnzh] .= obj_weight .* qp.data.H.vals
+    @views vals[(nnzh + 1):end] .= obj_weight .* qp.data.σ
+  end
   return vals
 end
 
@@ -392,9 +539,11 @@ function NLPModels.hess_coord!(
   obj_weight::Real = one(eltype(x)),
 ) where {T, S, M1 <: SparseMatrixCSC}
   NLPModels.increment!(qp, :neval_hess)
-  nnzh = qp.data.regularize ? qp.meta.nnzh - length(qp.data.selected) : qp.meta.nnzh
-  @views fill_coord!(qp.data.H, vals[1:nnzh], obj_weight)
-  @views vals[(nnzh + 1):end] .= obj_weight .* qp.data.σ
+  if !qp.meta.islp
+    nnzh = qp.data.regularize ? qp.meta.nnzh - length(qp.data.selected) : qp.meta.nnzh
+    @views fill_coord!(qp.data.H, vals[1:nnzh], obj_weight)
+    @views vals[(nnzh + 1):end] .= obj_weight .* qp.data.σ
+  end
   return vals
 end
 
@@ -405,15 +554,17 @@ function NLPModels.hess_coord!(
   obj_weight::Real = one(eltype(x)),
 ) where {T, S, M1 <: Matrix}
   NLPModels.increment!(qp, :neval_hess)
-  count = 1
-  for j = 1:(qp.meta.nvar)
-    is_selected = j in qp.data.selected
-    for i = j:(qp.meta.nvar)
-      vals[count] = obj_weight * qp.data.H[i, j]
-      if qp.data.regularize && is_selected && i == j 
-        vals[count] += obj_weight * qp.data.σ
+  if !qp.meta.islp
+    count = 1
+    for j = 1:(qp.meta.nvar)
+      is_selected = j in qp.data.selected
+      for i = j:(qp.meta.nvar)
+        vals[count] = obj_weight * qp.data.H[i, j]
+        if qp.data.regularize && is_selected && i == j 
+          vals[count] += obj_weight * qp.data.σ
+        end
+        count += 1
       end
-      count += 1
     end
   end
   return vals
@@ -439,7 +590,7 @@ function NLPModels.jac_lin_structure!(
 end
 
 function NLPModels.jac_lin_structure!(
-  qp::QuadraticModel{T, S, M1, M2},
+  qp::AbstractQuadraticModel{T, S, M1, M2},
   rows::AbstractVector{<:Integer},
   cols::AbstractVector{<:Integer},
 ) where {T, S, M1, M2 <: SparseMatrixCSC}
@@ -532,11 +683,13 @@ function NLPModels.hprod!(
   obj_weight::Real = one(eltype(x)),
 )
   NLPModels.increment!(qp, :neval_hprod)
-  mul!(Hv, Symmetric(qp.data.H, :L), v)
-  qp.data.regularize &&
-    (@views Hv[qp.data.selected] .+= qp.data.σ .* v[qp.data.selected])
-  if obj_weight != 1
-    Hv .*= obj_weight
+  if !qp.meta.islp
+    mul!(Hv, Symmetric(qp.data.H, :L), v)
+    qp.data.regularize &&
+      (@views Hv[qp.data.selected] .+= qp.data.σ .* v[qp.data.selected])
+    if obj_weight != 1
+      Hv .*= obj_weight
+    end
   end
   return Hv
 end
@@ -647,7 +800,7 @@ end
 function NLPModelsModifiers.SlackModel(
   qp::AbstractQuadraticModel{T, S},
   name = qp.meta.name * "-slack",
-) where {T, S}
+) where {T, S <: AbstractVector{T}}
   qp.meta.ncon == length(qp.meta.jfix) && return qp
   nfix = length(qp.meta.jfix)
   ns = qp.meta.ncon - nfix
