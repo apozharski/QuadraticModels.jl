@@ -1,4 +1,4 @@
-export jac_structure!, hess_structure!, jac_coord!, hess_coord!, SlackModel!
+export jac_structure!, hess_structure!, jac_coord!, hess_coord!, SlackModel!, linearize
 
 mutable struct QPData{
   T,
@@ -176,7 +176,7 @@ function QuadraticModel(
 end
 
 
-function QuadraticModel(
+function LinearModel(
   c::S,
   Arows::AbstractVector{<:Integer},
   Acols::AbstractVector{<:Integer},
@@ -298,7 +298,7 @@ function QuadraticModel(
 end
 
 
-function QuadraticModel(
+function LinearModel(
   c::S,
   A::Union{AbstractMatrix{T}, AbstractLinearOperator{T}};
   lcon::S = S(undef, 0),
@@ -345,7 +345,7 @@ end
 
 Creates a quadratic Taylor model of `nlp` around `x`.
 """
-function QuadraticModel(model::AbstractNLPModel{T, S}, x::AbstractVector; kwargs...) where {T, S <: AbstractVector{T}}
+function QuadraticModel(model::AbstractNLPModel{T, S}, x::AbstractVector; linear=false, kwargs...) where {T, S <: AbstractVector{T}}
   nvar = model.meta.nvar
   ncon = model.meta.ncon
   c0 = obj(model, x)
@@ -385,6 +385,83 @@ function QuadraticModel(model::AbstractNLPModel{T, S}, x::AbstractVector; kwargs
       kwargs...,
     )
   end
+end
+
+"""
+    linearize(nlp, x)
+
+Creates a Linear Taylor model of `nlp` around `x`.
+
+Optionally also uses an ell infinity trust region
+"""
+function linearize(model::AbstractNLPModel{T, S}, x::AbstractVector; tr=0.0) where {T, S <: AbstractVector{T}}
+  nvar = model.meta.nvar
+  ncon = model.meta.ncon
+  c0 = obj(model, x)
+  g = grad(model, x)
+  c = cons(model, x)
+  Arows, Acols = jac_structure(model)
+  Avals = jac_coord(model, x)
+  if tr > 0.0
+    LinearModel(
+      g,
+      Arows,
+      Acols,
+      Avals;
+      c0 = c0,
+      lcon = model.meta.lcon .- c,
+      ucon = model.meta.ucon .- c,
+      lvar = max.(model.meta.lvar .- x, -tr),
+      uvar = min.(model.meta.uvar .- x, tr),
+      x0 = fill!(S(undef, model.meta.nvar), zero(T)),
+    )
+  else
+    LinearModel(
+      g,
+      Arows,
+      Acols,
+      Avals;
+      c0 = c0,
+      lcon = model.meta.lcon .- c,
+      ucon = model.meta.ucon .- c,
+      lvar = model.meta.lvar .- x,
+      uvar = model.meta.uvar .- x,
+      x0 = fill!(S(undef, model.meta.nvar), zero(T)),
+    )
+  end
+end
+
+"""
+    linearize!(nlp, x)
+
+Update a Linear Taylor model of `nlp` around `x`.
+
+Optionally also uses an ell infinity trust region.
+
+Note this is only efficient if matricies in the qp are stored as COO
+"""
+function linearize!(lp::QuadraticModel{T, S, M1, M2},
+                    model::AbstractNLPModel{T, S},
+                    x::AbstractVector;
+                    tr=0.0) where {T, S <: AbstractVector{T}, M1<:SparseMatrixCOO, M2<:SparseMatrixCOO}
+  # TODO(@anton) this _does not_ work for sorted cols. In principle we could store an index list
+  #              but need to check that this doesn't break compatibility
+  lp.data.c0 = obj(model, x)
+  grad!(model, x, lp.data.c)
+  jac_coord!(model, x, lp.data.A.vals)
+  # This uses lcon as a buffer for the calculation of new bounds
+  c = cons!(model, x, lp.meta.lcon)
+  lp.meta.ucon .= model.meta.ucon .- c
+  lp.meta.lcon .= model.meta.lcon .- lp.meta.lcon # Help compiler here
+  if tr > 0.0
+      lp.meta.lvar .= max.(model.meta.lvar .- x, -tr)
+      lp.meta.uvar .= min.(model.meta.uvar .- x, tr)
+  else
+      lp.meta.lvar .= model.meta.lvar .- x
+      lp.meta.uvar .= model.meta.uvar .- x
+  end
+
+  return lp
 end
 
 linobj(qp::AbstractQuadraticModel, args...) = qp.data.c
