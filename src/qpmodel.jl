@@ -229,8 +229,8 @@ function LinearModel(
     QPData(
       c0,
       c,
-      SparseMatrixCOO(nvar, nvar, Int[], Int[], T[]),
-      SparseMatrixCOO(ncon, nvar, Arows, Acols, Avals),
+      sparse(Int[], Int[], T[], nvar, nvar),
+      sparse(Arows, Acols, Avals, ncon, nvar),
       regularize = false,
       selected = Int[],
       σ = 0,
@@ -449,6 +449,65 @@ function linearize!(lp::QuadraticModel{T, S, M1, M2},
   lp.data.c0 = obj(model, x)
   grad!(model, x, lp.data.c)
   jac_coord!(model, x, lp.data.A.vals)
+  # This uses lcon as a buffer for the calculation of new bounds
+  c = cons!(model, x, lp.meta.lcon)
+  lp.meta.ucon .= model.meta.ucon .- c
+  lp.meta.lcon .= model.meta.lcon .- lp.meta.lcon # Help compiler here
+  if tr > 0.0
+      lp.meta.lvar .= max.(model.meta.lvar .- x, -tr)
+      lp.meta.uvar .= min.(model.meta.uvar .- x, tr)
+  else
+      lp.meta.lvar .= model.meta.lvar .- x
+      lp.meta.uvar .= model.meta.uvar .- x
+  end
+
+  return lp
+end
+
+# An inplace linearize specialized for CSC matricies.
+"""
+    linearize!(nlp, x)
+
+Update a Linear Taylor model of `nlp` around `x`.
+
+Optionally also uses an ell infinity trust region.
+
+Advanced usage which requires providing a correct matrix as well as intermediate vectors
+"""
+function linearize!(lp::QuadraticModel{T, S, M1, M2},
+                    model::AbstractNLPModel{T, S},
+                    x::AbstractVector,
+                    A::SparseMatrixCOO,
+                    klasttouch::AbstractVector,
+                    csrrowptr::AbstractVector,
+                    csrcolval::AbstractVector,
+                    csrnzval::AbstractVector;
+                    tr=0.0) where {T, S <: AbstractVector{T}, M1<:AbstractMatrix, M2<:SparseMatrixCSC}
+  # TODO(@anton) this _does not_ work for sorted cols. In principle we could store an index list
+  #              but need to check that this doesn't break compatibility
+
+  # Eval new data
+  m,n = size(lp.data.A)
+  lp.data.c0 = obj(model, x)
+  grad!(model, x, lp.data.c)
+  jac_coord!(model, x, A.vals)
+
+  # Update the data inplace
+  SparseArrays.sparse!(
+        A.rows,
+        A.cols,
+        A.vals,
+        m,
+        n,
+        +,
+        klasttouch,
+        csrrowptr,
+        csrcolval,
+        csrnzval,
+        lp.data.A.colptr,
+        lp.data.A.rowval,
+        lp.data.A.nzval,
+    )
   # This uses lcon as a buffer for the calculation of new bounds
   c = cons!(model, x, lp.meta.lcon)
   lp.meta.ucon .= model.meta.ucon .- c
@@ -744,7 +803,14 @@ function NLPModels.jac_lin(
   return qp.data.A
 end
 
-function NLPModels.cons_lin!(qp::AbstractQuadraticModel, x::AbstractVector, c::AbstractVector)
+function NLPModels.cons!(qp::AbstractQuadraticModel, x::AbstractVector, c::AbstractVector)
+  @lencheck qp.meta.nvar x
+  @lencheck qp.meta.ncon c
+  cons_lin!(qp, x, c)
+  return c
+end
+
+function NLPModels.cons_lin!(qp::AbstractQuadraticModel{T}, x::AbstractVector{T}, c::AbstractVector{T}) where {T}
   @lencheck qp.meta.nvar x
   @lencheck qp.meta.nlin c
   NLPModels.increment!(qp, :neval_cons_lin)
