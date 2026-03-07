@@ -432,7 +432,7 @@ function linearize(model::AbstractNLPModel{T, S}, x::AbstractVector; tr=0.0) whe
 end
 
 """
-    linearize!(nlp, x)
+    linearize!(lp, nlp, x)
 
 Update a Linear Taylor model of `nlp` around `x`.
 
@@ -466,13 +466,15 @@ end
 
 # An inplace linearize specialized for CSC matricies.
 """
-    linearize!(nlp, x)
+    linearize!(lp, nlp, x)
 
 Update a Linear Taylor model of `nlp` around `x`.
 
 Optionally also uses an ell infinity trust region.
 
-Advanced usage which requires providing a correct matrix as well as intermediate vectors
+Advanced usage which requires providing a correct matrix as well as intermediate vectors.
+
+This only works for models where the columns of the lp Matrix have not been sorted.
 """
 function linearize!(lp::QuadraticModel{T, S, M1, M2},
                     model::AbstractNLPModel{T, S},
